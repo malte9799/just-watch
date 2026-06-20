@@ -112,6 +112,17 @@
             transition: all 0.5s ease;
         }
 
+        /* Anti-Popup Engagement Shield Overlay */
+        .player-shield {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 1055;
+            background: transparent;
+            cursor: pointer;
+            display: none;
+        }
+
         .theater-overlay {
             position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
             background: rgba(0,0,0,0.95); z-index: 1040;
@@ -162,7 +173,7 @@
                 <div class="card glass-card h-100 shadow-lg">
                     <div class="card-body p-4">
                         <h6 class="card-title mb-3 text-secondary text-uppercase tracking-wide"><i class="bi bi-hash me-1"></i>Direct Link</h6>
-                        <form method="get" onsubmit="event.preventDefault(); loadIframeById(); return false;">
+                        <form method="get" onsubmit="event.preventDefault(); handleDirectLinkSubmit(); return false;">
                             <input type="text" id="id" class="form-control bg-dark text-white border-secondary mb-2" placeholder="IMDb ID (tt1553656)" required>
                             <div class="input-group mb-3 gap-2">
                                 <input type="number" id="season" class="form-control bg-dark text-white border-secondary rounded" placeholder="Season">
@@ -210,17 +221,26 @@
     </div>
 
     <div class="container mb-5 position-relative">
-        <div class="d-flex justify-content-between align-items-center mb-2" id="player-controls" style="display: none !important; max-width: 1200px; margin: 0 auto;">
-            <div>
+        <div class="d-flex flex-wrap justify-content-between align-items-center mb-2 gap-2" id="player-controls" style="display: none !important; max-width: 1200px; margin: 0 auto;">
+            <div class="d-flex align-items-center gap-3 flex-wrap">
                 <button class="btn btn-sm btn-primary rounded-pill px-3 shadow shadow-primary" id="next-episode-btn" onclick="playNextEpisode()" style="display: none;">
                     Next Episode <i class="bi bi-skip-forward-fill ms-1" style="font-size:0.75rem;"></i>
                 </button>
+                
+                <div class="input-group input-group-sm" style="max-width: 220px;">
+                    <label class="input-group-text bg-dark border-secondary text-secondary small" for="server-select"><i class="bi bi-server me-1"></i> Source</label>
+                    <select class="form-select bg-dark text-white border-secondary small" id="server-select" onchange="changeServer(this.value)">
+                        <option value="multiembed">MultiEmbed (Primary)</option>
+                        <option value="vsembed">VSEmbed (Backup)</option>
+                    </select>
+                </div>
             </div>
             <button class="btn btn-sm btn-outline-light rounded-pill px-3 shadow-sm" onclick="toggleTheaterMode()" style="z-index: 1060; position: relative;">
                 <i class="bi bi-lightbulb-fill me-1"></i> Theater Mode
             </button>
         </div>
-        <div class="iframe-wrapper" id="player-container">
+        <div class="iframe-wrapper position-relative" id="player-container">
+            <div class="player-shield" id="player-shield" onclick="neutralizeShield(this)"></div>
             <iframe src="" width="100%" height="650px" style="border:none;" allowfullscreen></iframe>
         </div>
     </div>
@@ -325,6 +345,12 @@
         let activeEpisodeNum = 1;
         let totalSeasonsCount = 0;
         let totalEpisodesInActiveSeason = 0;
+        
+        // Active streaming server choice persistent tracking
+        let activeServer = localStorage.getItem('user_active_server') || 'multiembed';
+        
+        // Security anti-hijack toggle state
+        let secureRedirectLock = false;
 
         // --- UX / UI Operations ---
         function showToast(title, message) {
@@ -362,6 +388,41 @@
             document.getElementById('search-results-header').style.display = 'none';
             showToast('Results Hidden', 'Search layout collapsed. Search again to restore views.');
         }
+
+        // Hot-swapping sources without losing active state
+        function changeServer(serverName) {
+            activeServer = serverName;
+            localStorage.setItem('user_active_server', serverName);
+            
+            const id = document.querySelector('#id').value;
+            if (id) {
+                const contextTitle = document.title.replace("Playing - ", "");
+                loadIframeById(contextTitle);
+                showToast('Source Updated', `Switched network connection paths to ${serverName === 'vsembed' ? 'VSEmbed' : 'MultiEmbed'}.`);
+            }
+        }
+
+        // Neutralizes the first click popup trap
+        function neutralizeShield(shieldElement) {
+            shieldElement.style.display = 'none';
+            showToast('Shield Armed', 'Pop-up trap blocked. Click once more to play safely.');
+            
+            // Re-arm shield overlay 20 seconds later to capture subsequent timeline manipulation traps
+            setTimeout(() => {
+                if(activeServer === 'vsembed' && document.getElementById('player-container').style.display === 'block') {
+                    shieldElement.style.display = 'block';
+                }
+            }, 20000);
+        }
+
+        // Anti-Hijack Tab Security Trigger Block
+        window.addEventListener('beforeunload', function (event) {
+            if (secureRedirectLock) {
+                event.preventDefault();
+                event.returnValue = 'Stream app intercepted an unauthorized third-party tab redirection.';
+                return event.returnValue;
+            }
+        });
 
         // --- Search Engines ---
         async function search(defaultQuery = null) {
@@ -457,7 +518,7 @@
         }
 
         // --- Core TV Show Dashboard Engine ---
-        async function setupTvShowDashboard(tvId, showName) {
+        async function setupTvShowDashboard(tvId, showName, initialSeason = 1, initialEpisode = null) {
             currentShowTvId = tvId;
             currentShowTitle = showName;
             
@@ -492,16 +553,28 @@
                     }
                 });
 
+                dropdown.value = initialSeason;
                 document.getElementById('tv-guide-title').innerText = showName;
                 document.getElementById('tv-guide-wrapper').style.display = 'block';
                 
-                handleSeasonChange(1);
+                await handleSeasonChange(initialSeason, initialEpisode);
+                
+                if (initialEpisode === null) {
+                    // Normal behavior: auto-play first episode index on selection
+                    const firstEpBtn = document.querySelector('#episode-grid .ep-btn');
+                    if(firstEpBtn) firstEpBtn.click();
+                } else {
+                    // Deep-linked routing: UI highlights without overwriting current iframe thread initialization
+                    document.getElementById('player-controls').setAttribute('style', 'display: flex !important; max-width: 1200px; margin: 0 auto;');
+                    document.getElementById('next-episode-btn').style.display = 'inline-block';
+                    loadIframeById(`${showName} - S${initialSeason}E${initialEpisode}`);
+                }
                 
                 window.scrollTo({ top: document.getElementById('tv-guide-wrapper').offsetTop - 20, behavior: 'smooth' });
             } catch(e) { showToast('Error', 'Failed to retrieve show breakdown metrics.'); }
         }
 
-        async function handleSeasonChange(seasonNum) {
+        async function handleSeasonChange(seasonNum, initialEpisode = null) {
             activeSeasonNum = parseInt(seasonNum);
             const grid = document.getElementById('episode-grid');
             grid.innerHTML = '<div class="col-12 text-center py-4"><div class="spinner-border text-success" role="status"></div></div>';
@@ -529,6 +602,7 @@
                     grid.appendChild(btn);
                 });
                 
+                if (initialEpisode) activeEpisodeNum = parseInt(initialEpisode);
                 syncActiveEpisodeHighlight();
             } catch(e) { grid.innerHTML = '<div class="col-12 text-center text-danger py-4">Error loading episode manifests.</div>'; }
         }
@@ -588,11 +662,39 @@
             }
         }
 
+        // --- URL Param / Manual Direct Input Routing Middleware ---
+        function handleDirectLinkSubmit() {
+            const id = document.querySelector('#id').value;
+            const season = document.querySelector('#season').value;
+            const episode = document.querySelector('#episode').value;
+            
+            if (id && season && episode) {
+                hydrateTvDashboardFromImdb(id, parseInt(season), parseInt(episode));
+            } else {
+                document.getElementById('tv-guide-wrapper').style.display = 'none';
+                document.getElementById('next-episode-btn').style.display = 'none';
+                loadIframeById();
+            }
+        }
+
+        async function hydrateTvDashboardFromImdb(imdbId, s, e) {
+            try {
+                const res = await fetch(`https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_API_KEY}&external_source=imdb_id`);
+                const data = await res.json();
+                if (data.tv_results && data.tv_results.length > 0) {
+                    setupTvShowDashboard(data.tv_results[0].id, data.tv_results[0].name, s, e);
+                } else {
+                    loadIframeById();
+                }
+            } catch(err) { loadIframeById(); }
+        }
+
         // --- Core Player Deployment Execution Vectors ---
         async function loadIframeById(knownTitle = null) {
             const iframe = document.querySelector('iframe');
             const playerContainer = document.querySelector('#player-container');
             const playerControls = document.querySelector('#player-controls');
+            const shield = document.getElementById('player-shield');
             const id = document.querySelector('#id').value;
             const season = document.querySelector('#season').value;
             const episode = document.querySelector('#episode').value;
@@ -602,8 +704,25 @@
             playerContainer.style.display = 'block';
             playerControls.setAttribute('style', 'display: flex !important; max-width: 1200px; margin: 0 auto;');
 
-            let src = `https://multiembed.mov/?video_id=${id}`;
-            if (season && episode) src += `&s=${season}&e=${episode}`;
+            // --- Multi-Server URL Generator Engine with Security Configurations ---
+            let src = "";
+            if (activeServer === 'vsembed') {
+                secureRedirectLock = true; 
+                shield.style.display = 'block'; 
+                
+                if (season && episode) {
+                    src = `https://vsembed.ru/embed/tv?imdb=${id}&season=${season}&episode=${episode}`;
+                } else {
+                    src = `https://vsembed.ru/embed/movie?imdb=${id}`;
+                }
+            } else {
+                secureRedirectLock = false; 
+                shield.style.display = 'none';
+                
+                src = `https://multiembed.mov/?video_id=${id}`;
+                if (season && episode) src += `&s=${season}&e=${episode}`;
+            }
+            
             iframe.src = src;
 
             let finalTitle = knownTitle;
@@ -634,7 +753,6 @@
 
             update_tables();
             document.querySelector('title').innerHTML = `Playing - ${finalTitle}`;
-            showToast('Now Playing', `Streaming link targeted.`);
             
             history.pushState({}, null, `?id=${id}&s=${season}&e=${episode}`);
             playerContainer.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -691,7 +809,14 @@
                     document.querySelector("#id").value = item.id;
                     document.querySelector("#season").value = item.season === '-' ? '' : item.season;
                     document.querySelector("#episode").value = item.episode === '-' ? '' : item.episode;
-                    loadIframeById(item.title);
+                    
+                    if (item.season !== '-') {
+                        hydrateTvDashboardFromImdb(item.id, parseInt(item.season), parseInt(item.episode));
+                    } else {
+                        document.getElementById('tv-guide-wrapper').style.display = 'none';
+                        document.getElementById('next-episode-btn').style.display = 'none';
+                        loadIframeById(item.title);
+                    }
                 });
                 historyBody.appendChild(row);
             });
@@ -704,10 +829,29 @@
 
             [...watchlist].reverse().forEach(item => {
                 var row = document.createElement('tr');
+                row.style.cursor = 'pointer';
                 row.innerHTML = `
                     <td class="fw-bold px-4 text-light"><i class="bi bi-bookmark-fill text-primary me-2"></i>${item.title}</td>
-                    <td class="text-secondary"><span class="badge ${item.type === 'Movie' ? 'bg-primary' : 'bg-success'} bg-opacity-75 border border-secondary">${item.type}</span></td>
+                    <td class="text-secondary"><span class="badge ${item.media_type === 'movie' || item.type === 'Movie' ? 'bg-primary' : 'bg-success'} bg-opacity-75 border border-secondary">${item.type}</span></td>
                 `;
+                row.addEventListener('click', async () => {
+                    if (item.media_type === "movie" || item.type === "Movie") {
+                        document.getElementById('tv-guide-wrapper').style.display = 'none';
+                        document.getElementById('next-episode-btn').style.display = 'none';
+                        try {
+                            const res = await fetch(`https://api.themoviedb.org/3/movie/${item.tmdb_id}/external_ids?api_key=${TMDB_API_KEY}`);
+                            const ids = await res.json();
+                            if(ids.imdb_id) {
+                                document.querySelector("#id").value = ids.imdb_id;
+                                document.querySelector("#season").value = '';
+                                document.querySelector("#episode").value = '';
+                                loadIframeById(item.title);
+                            }
+                        } catch(e) { showToast('Error', 'Unable to resolve external records.'); }
+                    } else {
+                        setupTvShowDashboard(item.tmdb_id, item.title);
+                    }
+                });
                 watchlistBody.appendChild(row);
             });
 
@@ -715,12 +859,25 @@
         }
 
         window.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('server-select').value = activeServer;
+
             const urlParams = new URLSearchParams(window.location.search);
             if (urlParams.has('id')) {
-                document.querySelector('#id').value = urlParams.get('id');
-                document.querySelector('#season').value = urlParams.get('s') || '';
-                document.querySelector('#episode').value = urlParams.get('e') || '';
-                loadIframeById();
+                const imdbId = urlParams.get('id');
+                const s = urlParams.get('s');
+                const e = urlParams.get('e');
+                
+                document.querySelector('#id').value = imdbId;
+                document.querySelector('#season').value = s || '';
+                document.querySelector('#episode').value = e || '';
+
+                if (s && e) {
+                    hydrateTvDashboardFromImdb(imdbId, parseInt(s), parseInt(e));
+                } else {
+                    document.getElementById('tv-guide-wrapper').style.display = 'none';
+                    document.getElementById('next-episode-btn').style.display = 'none';
+                    loadIframeById();
+                }
             } else {
                 search('Oppenheimer');
             }
