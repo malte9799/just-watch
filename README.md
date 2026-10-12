@@ -6,7 +6,7 @@
 
 No accounts. No backend. No build step. Just open it and press play.
 
-[**Open the site →**](https://mahad-hashmi2804.github.io/) &nbsp;·&nbsp; [Video demo](https://youtu.be/ZdbZgsT-24k)
+[**Open the site →**](https://malte9799.github.io/just-watch/) &nbsp;·&nbsp; [Video demo](https://youtu.be/ZdbZgsT-24k)
 
 </div>
 
